@@ -2,9 +2,14 @@ import requests
 import json
 from pathlib import Path
 import concurrent.futures
-
 from tqdm import tqdm
 
+
+def make_path(path):
+    _path = Path(path)
+    if not _path.is_dir():
+        Path.mkdir(_path)
+    return _path
 
 def download(cookie, post_id):
     url = 'https://api.fanbox.cc/post.info'
@@ -58,8 +63,6 @@ class DownloadPicture:
         self.post_id = post_id
         self.save_path = Path(save_path)
         self.log['pictures'] = self.log.get('pictures', {})
-        if not Path(self.save_path / self.post_id).is_dir():
-            Path.mkdir(self.save_path / post_id)
         self.s = requests.session()
         self.s.headers.update(
             {
