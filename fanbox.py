@@ -4,13 +4,24 @@ import json
 
 
 class Fanbox:
-    def __init__(self, config, log, save_path_root='.'):
+    def __init__(self, config, log_file, save_path, max_threads=5):
         self.config = config
+        self.log_file = log_file
         self.cookies = config['cookies']
         self.post_id = config['latest_post']
         self.creator = config['creator']
-        self.log = log
-        self.save_path = make_path(Path(save_path_root) / config['creator'])
+        self.max_threads = max_threads
+        self.save_path = save_path
+
+        # 加载日志文件
+        if not log_file.exists():
+            Path.touch(log_file)
+            self.log = {}
+            with open(log_file, 'w', encoding='utf-8') as logfile:
+                json.dump(self.log, logfile)
+        else:
+            with open(log_file, 'r', encoding='utf-8') as logfile:
+                self.log = json.load(logfile)
 
         # 如果config中没有creator信息，则初始化creator为空字典
         if not self.log.get(self.creator):
@@ -30,7 +41,7 @@ class Fanbox:
                 temp_log = self.log[self.creator].get(post_id, {})    # temp_log  {'status':'locked','pictures':{}}
                 if images:
                     temp_log['status'] = 'unlocked'
-                    d1 = DownloadPicture(self.save_path, post_id, self.cookies, images, temp_log)
+                    d1 = DownloadPicture(self.save_path, post_id, self.cookies, images, temp_log, self.max_threads)
                     if mode == 'multiple':
                         d1.multi_download()
                     else:
@@ -49,7 +60,7 @@ class Fanbox:
             print(e)
 
         finally:
-            with open('log.json', 'w', encoding='utf-8') as _log:
+            with open(self.log_file, 'w', encoding='utf-8') as _log:
                 json.dump(self.log, _log, ensure_ascii=False, indent=4)
 
 
@@ -69,7 +80,7 @@ class Fanbox:
                     temp_log = self.log[self.creator].get(self.post_id, {})    # temp_log  {'status':'locked','pictures':{}}
                     if images:
                         temp_log['status'] = 'unlocked'
-                        d1 = DownloadPicture(self.save_path, self.post_id, self.cookies, images, temp_log)
+                        d1 = DownloadPicture(self.save_path, self.post_id, self.cookies, images, temp_log, self.max_threads)
                         if mode == 'multiple':
                             d1.multi_download()
                         else:
@@ -87,7 +98,7 @@ class Fanbox:
             except Exception as e:
                 print(e)
             finally:
-                with open('log.json', 'w', encoding='utf-8') as _log:
+                with open(self.log_file, 'w', encoding='utf-8') as _log:
                     json.dump(self.log, _log, ensure_ascii=False, indent=4)
                 with open('config.json', 'w', encoding='utf-8') as config_:
                     json.dump(self.config, config_, ensure_ascii=False, indent=4)
@@ -96,15 +107,14 @@ class Fanbox:
 if __name__ == '__main__':
     config_file = Path('config.json')
     with open(config_file, 'r', encoding='utf-8') as configfile:
-        config = json.load(configfile)
+        cfg = json.load(configfile)
+    cre = cfg['creator']
 
-    log_file = Path('log.json')
-    if not log_file.exists():
-        Path.touch(log_file)
-        log = {}
-    else:
-        with open(log_file, 'r', encoding='utf-8') as logfile:
-            log = json.load(logfile)
+    # 保存的根目录
+    save_root = make_path('creator')
+    save_path = make_path(save_root / cre)
 
-    f = Fanbox(config, log)
+    l_f = save_path / 'log.json'
+
+    f = Fanbox(cfg, l_f, save_path)
     f.next_search()
