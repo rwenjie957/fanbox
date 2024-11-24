@@ -64,10 +64,10 @@ class Fanbox:
                 json.dump(self.log, _log, ensure_ascii=False, indent=4)
 
 
-    def next_search(self, mode = 'multiple'):
+    def next_search(self, mode = 'multiple',update = False):        #update：是否重新下载最新的post
         post_data = download(self.cookies, self.post_id)
         _prev, _next, images = analysis(post_data)          # 获取当前文章的所有图片链接和前后文章id
-        if not _next:                       # 如果没有新增文章
+        if not _next and not update:                       # 如果没有新增文章
             print('没有新增动态')
         else:
             try:
@@ -103,6 +103,25 @@ class Fanbox:
                 with open('config.json', 'w', encoding='utf-8') as config_:
                     json.dump(self.config, config_, ensure_ascii=False, indent=4)
 
+
+    def re_download(self, post_id, mode='multiple'):
+        post_data = download(self.cookies, post_id)
+        _prev, _next, images = analysis(post_data)
+        log = self.log[self.creator].get(post_id, {})
+        if images:
+            d1 = DownloadPicture(self.save_path, post_id, self.cookies, images, log, self.max_threads)
+            if mode == 'multiple':
+                d1.multi_download()
+            else:
+                d1.single_download()
+            self.log[self.creator].update({post_id:d1.log})         # 更新指定id的图片
+
+        else:
+            log['status'] = 'locked'
+            self.log[self.creator].update({post_id:log})
+
+        with open(self.log_file, 'w', encoding='utf-8') as _log:
+            json.dump(self.log, _log, ensure_ascii=False, indent=4)
 
 if __name__ == '__main__':
     config_file = Path('config.json')
