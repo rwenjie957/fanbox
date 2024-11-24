@@ -11,7 +11,7 @@ def make_path(path):
         Path.mkdir(_path)
     return _path
 
-def download(cookie, post_id):
+def download(cookie, post_id, proxies=None):
     url = 'https://api.fanbox.cc/post.info'
     headers = {
         'authority': 'api.fanbox.cc',
@@ -25,7 +25,7 @@ def download(cookie, post_id):
         'Sec-Ch-Ua-Platform': "Windows"
     }
     payload = {'postId': post_id}
-    r = requests.get(url, headers=headers, params=payload)
+    r = requests.get(url, headers=headers, params=payload,proxies=proxies)
     r.encoding = 'utf-8'
     data = json.loads(r.text)
     return data
@@ -57,12 +57,14 @@ def analysis(post):
 
 
 class DownloadPicture:
-    def __init__(self, save_path, post_id, cookies, urls, log):    # log: {'status':'locked','pictures':{}}
+    def __init__(self, save_path, post_id, cookies, urls, log, max_threads=5):    # log: {'status':'locked','pictures':{}}
         self.log=log
         self.urls = urls
         self.post_id = post_id
         self.save_path = Path(save_path)
         self.log['pictures'] = self.log.get('pictures', {})
+        self.max_threads = max_threads
+
         self.s = requests.session()
         self.s.headers.update(
             {
@@ -91,7 +93,7 @@ class DownloadPicture:
             self._download(name, url)
 
     def multi_download(self):
-        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as con:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads) as con:
             for name, url in self.urls.items():
                 try:
                     if not self.log['pictures'].get(name, False):
