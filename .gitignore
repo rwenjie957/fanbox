@@ -5,3 +5,4 @@ __pycache__
 test.py
 log.json
 creator
+*.sh

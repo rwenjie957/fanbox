@@ -83,7 +83,8 @@ class DownloadPicture:
     def _download(self, filename, url):
         with open(self.save_path / self.post_id / filename, 'wb') as file:
             pic = self.s.get(url, stream=True)
-            for chunk in tqdm(pic.iter_content(), desc=f'{filename}'):
+            length = int(pic.headers.get('Content-Length', 0))
+            for chunk in tqdm(pic.iter_content(), desc=f'{filename}', total=length, unit='B', unit_scale=True):
                 file.write(chunk)
         self.log['pictures'][filename] = True
         # print(f'{filename}下载成功')
