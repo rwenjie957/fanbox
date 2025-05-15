@@ -1,60 +1,104 @@
 from utils import *
 from pathlib import Path
 import json
+import httpx
+import concurrent.futures
+from tqdm import tqdm
 
 
 class Fanbox:
-    def __init__(self, config, log_file, save_path, max_threads=5):
-        self.config = config
-        self.log_file = log_file
-        self.cookies = config['cookies']
-        self.post_id = config['latest_post']
-        self.creator = config['creator']
+    def __init__(self, config_file, max_threads=5, allow_proxy=False):
+        self.config_file = config_file
+        with open(config_file, 'r', encoding='utf-8') as file:
+            self.config = json.load(file)
+        header = {
+            'Cookie': self.config['cookie'],
+            'Origin': 'https://www.fanbox.cc',
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15'
+        }
+        proxy = None
+        if allow_proxy:
+            proxy = self.config['proxy']
+        self.client = httpx.Client(headers=header, proxies=proxy)
+
+        self.creator = self.config['creator']
+        self.post_id = self.config['latest_post']
+
         self.max_threads = max_threads
-        self.save_path = save_path
+        self.save_path = make_path(Path(self.config['save_dir']) / self.creator)
+        self.log_file = self.save_path / 'log.json'
+        self.url = 'https://api.fanbox.cc/post.info'
 
         # 加载日志文件
-        if not log_file.exists():
-            Path.touch(log_file)
+        if not self.log_file.exists():
+            Path.touch(self.log_file)
             self.log = {}
-            with open(log_file, 'w', encoding='utf-8') as logfile:
+            with open(self.log_file, 'w', encoding='utf-8') as logfile:
                 json.dump(self.log, logfile)
         else:
-            with open(log_file, 'r', encoding='utf-8') as logfile:
+            with open(self.log_file, 'r', encoding='utf-8') as logfile:
                 self.log = json.load(logfile)
 
-        # 如果config中没有creator信息，则初始化creator为空字典
-        if not self.log.get(self.creator):
-            self.log[self.creator] = {}
 
-# 搜索之前的文章
-    def prev_search(self, mode = 'multiple'):
+    def download_file(self, filename, url, post_id):
+        bar_format = "{desc}: {percentage:3.0f}%|{bar}|{n_fmt}{unit}/{total_fmt}{unit}  [{elapsed}<{remaining}, {rate_fmt}{postfix}]"
+        with open(self.save_path / post_id / filename, 'wb') as file:
+            with self.client.stream("GET", url) as pic:
+                length = int(pic.headers.get('Content-Length', 0))          # 有时服务器返回的响应头没有Content-length字段
+                with tqdm(desc=f'{filename}', total=length, unit='B', bar_format=bar_format, unit_scale=True) as pbar:
+                        for chunk in pic.iter_bytes(1024):
+                            file.write(chunk)
+                            pbar.update(len(chunk))
+        self.log[post_id]['files'][filename] = True
+
+
+    def single_download(self, files, post_id):
+        for filename, url in files.items():
+            self.download_file(filename, url, post_id)
+
+    def multi_download(self, files, post_id):
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_threads) as con:
+            for filename, url in files.items():
+                if self.log[post_id]['files'].get(filename):
+                    pass
+                else:
+                    con.submit(self.download_file, filename, url, post_id)
+
+    # 更新post
+    def update(self, mode = 'single'):
         post_id = self.post_id                              # 给局部变量赋值类变量的post_id,由于向前搜索，不影响类中原本post_id
-        post_data = download(self.cookies, post_id)
-        _prev, _next, images = analysis(post_data)          # 获取当前文章的所有图片链接和前后文章id
+        self.log[post_id] = {}
+        post_data = self.client.get(self.url, params={'postId':post_id}).json()
+        _prev, _next, files = analysis(post_data)          # 获取当前文章的所有图片链接和前后文章id
         try:
             while post_id:
                 post_id_directory = make_path(self.save_path / post_id)
                 with open(post_id_directory / f'{post_id}.json', 'w', encoding='utf-8') as done:
                     json.dump(post_data, done, indent=4, ensure_ascii=False)
 
-                temp_log = self.log[self.creator].get(post_id, {})    # temp_log  {'status':'locked','pictures':{}}
-                if images:
-                    temp_log['status'] = 'unlocked'
-                    d1 = DownloadPicture(self.save_path, post_id, self.cookies, images, temp_log, self.max_threads)
+                self.log[post_id]['files'] = {}
+
+                # 下载所有文件
+                if files:
+                    self.log[post_id]['status'] = 'unlocked'
                     if mode == 'multiple':
-                        d1.multi_download()
+                        self.multi_download(files, post_id)
                     else:
-                        d1.single_download()
-                    self.log[self.creator].update({post_id:d1.log})
+                        self.single_download(files, post_id)
                     print(f"{post_id}已下载完毕")
                 else:
-                    temp_log['status'] = 'locked'
-                    self.log[self.creator].update({post_id:temp_log})
+                    self.log[post_id]['status'] = 'locked'
 
-                post_id = _prev
-                post_data = download(self.cookies, post_id)
-                _prev, _next, images = analysis(post_data)
+                if not _next:
+                    break
+                else:
+                    response = self.client.get(self.url, params={'postId':_next})
+                    if response.status_code != 200:
+                        raise httpx.NetworkError
+                    post_id = _next
+                    self.log[post_id] = {}
+                    post_data = response.json()
+                    _prev, _next, files = analysis(post_data)
 
         except Exception as e:
             print(e)
@@ -62,78 +106,34 @@ class Fanbox:
         finally:
             with open(self.log_file, 'w', encoding='utf-8') as _log:
                 json.dump(self.log, _log, ensure_ascii=False, indent=4)
+            self.config['latest_post'] = post_id
+            with open(self.config_file, 'w', encoding='utf-8') as file:
+                json.dump(self.config, file, ensure_ascii=False, indent=4)
 
-
-    def next_search(self, mode = 'multiple',update = False):        #update：是否重新下载最新的post
-        post_data = download(self.cookies, self.post_id)
-        _prev, _next, images = analysis(post_data)          # 获取当前文章的所有图片链接和前后文章id
-        if not _next and not update:                       # 如果没有新增文章
-            print('没有新增动态')
-        else:
-            try:
-                while self.post_id:
-                    post_id_directory = make_path(self.save_path / self.post_id)
-                    # 当有post_id时，下载文章信息
-                    with open(post_id_directory / f'{self.post_id}.json', 'w', encoding='utf-8') as done:
-                        json.dump(post_data, done, indent=4, ensure_ascii=False)
-
-                    temp_log = self.log[self.creator].get(self.post_id, {})    # temp_log  {'status':'locked','pictures':{}}
-                    if images:
-                        temp_log['status'] = 'unlocked'
-                        d1 = DownloadPicture(self.save_path, self.post_id, self.cookies, images, temp_log, self.max_threads)
-                        if mode == 'multiple':
-                            d1.multi_download()
+    def fix(self):
+        try:
+            for post in self.save_path.iterdir():
+                if post.is_dir():
+                    post_id = post.stem
+                    post_log = post / (post_id + '.json')
+                    with open(post_log, 'r', encoding='utf-8') as file:
+                        _log = json.load(file)
+                    _, _, files = analysis(_log)
+                    for file in files.keys():
+                        if file in self.log[post_id]['files']:
+                            pass
                         else:
-                            d1.single_download()
-                        self.log[self.creator].update({self.post_id:d1.log})
+                            print(f'{post_id}, {file}异常，重新下载')
+                            self.download_file(file, files[file], post_id)
+        except Exception as e:
+            print(e)
+        finally:
+            with open(self.log_file, 'w', encoding='utf-8') as _log:
+                json.dump(self.log, _log, ensure_ascii=False, indent=4)
 
-                    else:
-                        temp_log['status'] = 'locked'
-                        self.log[self.creator].update({self.post_id:temp_log})
-
-                    self.config['latest_post'] = self.post_id                # 更新最新的文章id
-                    self.post_id = _next
-                    post_data = download(self.cookies, self.post_id)
-                    _prev, _next, images = analysis(post_data)
-            except Exception as e:
-                print(e)
-            finally:
-                with open(self.log_file, 'w', encoding='utf-8') as _log:
-                    json.dump(self.log, _log, ensure_ascii=False, indent=4)
-                with open('config.json', 'w', encoding='utf-8') as config_:
-                    json.dump(self.config, config_, ensure_ascii=False, indent=4)
-
-
-    def re_download(self, post_id, mode='multiple'):
-        post_data = download(self.cookies, post_id)
-        _prev, _next, images = analysis(post_data)
-        log = self.log[self.creator].get(post_id, {})
-        if images:
-            d1 = DownloadPicture(self.save_path, post_id, self.cookies, images, log, self.max_threads)
-            if mode == 'multiple':
-                d1.multi_download()
-            else:
-                d1.single_download()
-            self.log[self.creator].update({post_id:d1.log})         # 更新指定id的图片
-
-        else:
-            log['status'] = 'locked'
-            self.log[self.creator].update({post_id:log})
-
-        with open(self.log_file, 'w', encoding='utf-8') as _log:
-            json.dump(self.log, _log, ensure_ascii=False, indent=4)
 
 if __name__ == '__main__':
-    config_file = Path('config.json')
-    with open(config_file, 'r', encoding='utf-8') as configfile:
-        cfg = json.load(configfile)
-    cre = cfg['creator']
-
-    # 保存的根目录
-    save_root = make_path('creator')
-    save_path = make_path(save_root / cre)
-
-    l_f = save_path / 'log.json'
-
-    f = Fanbox(cfg, l_f, save_path)
-    f.next_search()
+    cfg_file = Path('config.json')
+    f = Fanbox(cfg_file)
+    #f.update('multiple')
+    f.fix()

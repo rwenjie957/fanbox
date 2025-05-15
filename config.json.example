@@ -1,10 +1,7 @@
 {
     "creator": "",
-    "lastest_post":0,
-    "cookies":"",
-    "proxies":
-    {
-        "http":"",
-        "https":""
-    }
+    "latest_post": "",
+    "cookie": "",
+    "proxy": "http://192.168.1.1:7890",
+    "save_dir": ""
 }
