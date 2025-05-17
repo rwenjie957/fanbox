@@ -9,22 +9,18 @@ python3 fanbox_cli.py
 
 choose config file, default 'config.json'
 
-- -f --forward                
+- -m --mode
 
-whether download the previous or next posts, default is downloading the next posts
+whether use multiple threading to download, default='single', choices=['multiple', 'single']
 
-- -s --save-path [save-path]  
+- -f --fix
 
-where to save the pictures you have downloaded
+re-download the files that fails to download
 
-- -l --log-file [log-file]    
+- -t --threading
 
-the log file which recorded the posts that have downloaded
+use how many threads to download, default=5
 
-- -m --mode [single/multiple]
-download with a thread or multiple threads, default is multiple
+- -p --proxy
 
-- -r --re-download
-In my tests, sometimes some pictures may fail to download, you can either use this choice to re-download the latest post or user -i to download the specific post again 
-
-- -i --id
+whether use proxy, default = False
