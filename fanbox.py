@@ -4,6 +4,7 @@ import json
 import httpx
 import concurrent.futures
 from tqdm import tqdm
+import ssl
 
 
 class Fanbox:
@@ -11,19 +12,31 @@ class Fanbox:
         self.config_file = config_file
         with open(config_file, 'r', encoding='utf-8') as file:
             self.config = json.load(file)
+
+        # 请求头必需的三个参数
         header = {
             'Cookie': self.config['cookie'],
             'Origin': 'https://www.fanbox.cc',
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.4 Safari/605.1.15'
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15'
         }
+
+        # 代理
         proxy = None
         if allow_proxy:
             proxy = self.config['proxy']
-        self.client = httpx.Client(headers=header, proxies=proxy)
+
+        # 自定义 TLS 配置 (模拟浏览器的指纹)
+        CIPHERS = ':'.join(self.config['CIPHERS'])
+        context = ssl.create_default_context()
+        context.set_ciphers(CIPHERS)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.maximum_version = ssl.TLSVersion.TLSv1_3
+        context.post_handshake_auth = True  # 部分扩展模拟
+
+        self.client = httpx.Client(headers=header, proxies=proxy, verify=context)
 
         self.creator = self.config['creator']
-        self.post_id = self.config['latest_post']
-
+        self.post_id = str(self.config['latest_post'])
         self.max_threads = max_threads
         self.save_path = make_path(Path(self.config['save_dir']) / self.creator)
         self.log_file = self.save_path / 'log.json'
@@ -68,8 +81,12 @@ class Fanbox:
     def update(self, mode = 'single'):
         post_id = self.post_id                              # 给局部变量赋值类变量的post_id,由于向前搜索，不影响类中原本post_id
         self.log[post_id] = {}
-        post_data = self.client.get(self.url, params={'postId':post_id}).json()
+        post_ = self.client.get(self.url, params={'postId':post_id})
+        post_data = post_.json()
         _prev, _next, files = analysis(post_data)          # 获取当前文章的所有图片链接和前后文章id
+        if not _next:
+            print('已是最新')
+            return
         try:
             while post_id:
                 post_id_directory = make_path(self.save_path / post_id)
@@ -110,6 +127,7 @@ class Fanbox:
             with open(self.config_file, 'w', encoding='utf-8') as file:
                 json.dump(self.config, file, ensure_ascii=False, indent=4)
 
+    # 修复下载失败的文件
     def fix(self):
         try:
             for post in self.save_path.iterdir():
@@ -131,9 +149,28 @@ class Fanbox:
             with open(self.log_file, 'w', encoding='utf-8') as _log:
                 json.dump(self.log, _log, ensure_ascii=False, indent=4)
 
+    # 重新下载指定的post
+    def re_download(self, post_id):
+        post_id = str(post_id)
+        self.log[post_id] = {}
+        post_data = self.client.get(self.url, params={'postId': post_id}).json()
+        _prev, _next, files = analysis(post_data)
+        post_id_directory = make_path(self.save_path / post_id)
+        with open(post_id_directory / f'{post_id}.json', 'w', encoding='utf-8') as done:
+            json.dump(post_data, done, indent=4, ensure_ascii=False)
+        self.log[post_id]['files'] = {}
+        if files:
+            self.log[post_id]['status'] = 'unlocked'
+            self.single_download(files, post_id)
+            print(f"{post_id}已下载完毕")
+        else:
+            self.log[post_id]['status'] = 'locked'
+
+        with open(self.log_file, 'w', encoding='utf-8') as _log:
+            json.dump(self.log, _log, ensure_ascii=False, indent=4)
+
 
 if __name__ == '__main__':
     cfg_file = Path('config.json')
-    f = Fanbox(cfg_file)
-    #f.update('multiple')
-    f.fix()
+    f = Fanbox(cfg_file, allow_proxy=True)
+    f.update()

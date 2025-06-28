@@ -31,6 +31,11 @@ def analysis(post):
             for v in file_map.values():
                 name = '.'.join((v['id'], v['extension']))
                 files[name] = v['url']
+        if file := body.get('files', None):
+            for fi in file:
+                name = '.'.join((fi['id'], fi['extension']))
+                files[name] = fi['url']
+
     else:
         print('文章可能未解锁或者不可访问')
     return _prev, _next, files                 # images:{filename:url}
